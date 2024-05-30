@@ -5,9 +5,6 @@ from multiprocessing.sharedctypes import Value
 
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator
-from sklearn.base import TransformerMixin
-from sklearn.preprocessing import MaxAbsScaler
 from stockstats import StockDataFrame as Sdf
 
 from finrl import config
@@ -42,75 +39,13 @@ def convert_to_datetime(time):
         return datetime.datetime.strptime(time, time_fmt)
 
 
-class GroupByScaler(BaseEstimator, TransformerMixin):
-    """Sklearn-like scaler that scales considering groups of data.
-
-    In the financial setting, this scale can be used to normalize a DataFrame
-    with time series of multiple tickers. The scaler will fit and transform
-    data for each ticker independently.
-    """
-
-    def __init__(self, by, scaler=MaxAbsScaler, columns=None, scaler_kwargs=None):
-        """Initializes GoupBy scaler.
-
-        Args:
-            by: Name of column that will be used to group.
-            scaler: Scikit-learn scaler class to be used.
-            columns: List of columns that will be scaled.
-            scaler_kwargs: Keyword arguments for chosen scaler.
-        """
-        self.scalers = {}  # dictionary with scalers
-        self.by = by
-        self.scaler = scaler
-        self.columns = columns
-        self.scaler_kwargs = {} if scaler_kwargs is None else scaler_kwargs
-
-    def fit(self, X, y=None):
-        """Fits the scaler to input data.
-
-        Args:
-            X: DataFrame to fit.
-            y: Not used.
-
-        Returns:
-            Fitted GroupBy scaler.
-        """
-        # if columns aren't specified, considered all numeric columns
-        if self.columns is None:
-            self.columns = X.select_dtypes(exclude=["object"]).columns
-        # fit one scaler for each group
-        for value in X[self.by].unique():
-            X_group = X.loc[X[self.by] == value, self.columns]
-            self.scalers[value] = self.scaler(**self.scaler_kwargs).fit(X_group)
-        return self
-
-    def transform(self, X, y=None):
-        """Transforms unscaled data.
-
-        Args:
-            X: DataFrame to transform.
-            y: Not used.
-
-        Returns:
-            Transformed DataFrame.
-        """
-        # apply scaler for each group
-        X = X.copy()
-        for value in X[self.by].unique():
-            select_mask = X[self.by] == value
-            X.loc[select_mask, self.columns] = self.scalers[value].transform(
-                X.loc[select_mask, self.columns]
-            )
-        return X
-
-
 class FeatureEngineer:
     """Provides methods for preprocessing the stock price data
 
     Attributes
     ----------
         use_technical_indicator : boolean
-            we technical indicator or not
+            use technical indicator or not
         tech_indicator_list : list
             a list of technical indicator names (modified from neofinrl_config.py)
         use_turbulence : boolean
@@ -239,21 +174,49 @@ class FeatureEngineer:
 
     def add_user_defined_feature(self, data):
         """
-         add user defined features
+        Add user defined features
         :param data: (df) pandas dataframe
         :return: (df) pandas dataframe
         """
         df = data.copy()
+        
+        # Daily return
         df["daily_return"] = df.close.pct_change(1)
-        # df['return_lag_1']=df.close.pct_change(2)
-        # df['return_lag_2']=df.close.pct_change(3)
-        # df['return_lag_3']=df.close.pct_change(4)
-        # df['return_lag_4']=df.close.pct_change(5)
+        
+        # Lagged returns
+        df['return_lag_1'] = df.close.pct_change(2)
+        df['return_lag_2'] = df.close.pct_change(3)
+        df['return_lag_3'] = df.close.pct_change(4)
+        df['return_lag_4'] = df.close.pct_change(5)
+        
+        # Moving averages
+        df["ma5"] = df.close.rolling(window=5).mean()
+        df["ma10"] = df.close.rolling(window=10).mean()
+        df["ma20"] = df.close.rolling(window=20).mean()
+        
+        # Volatility (standard deviation of returns)
+        df["volatility"] = df["daily_return"].rolling(window=10).std()
+        
+        # Example technical indicators (e.g., Bollinger Bands)
+        df["bollinger_mid"] = df["ma20"]
+        df["bollinger_upper"] = df["ma20"] + (df["volatility"] * 2)
+        df["bollinger_lower"] = df["ma20"] - (df["volatility"] * 2)
+        
+        # Relative Strength Index (RSI)
+        delta = df["close"].diff(1)
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(window=14).mean()
+        avg_loss = loss.rolling(window=14).mean()
+        rs = avg_gain / avg_loss
+        df["rsi"] = 100 - (100 / (1 + rs))
+        
         return df
+
 
     def add_vix(self, data):
         """
-        add vix from yahoo finance
+        add votality index (vix) from yahoo finance
         :param data: (df) pandas dataframe
         :return: (df) pandas dataframe
         """
